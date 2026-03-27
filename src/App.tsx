@@ -56,8 +56,9 @@ export default function App() {
     try {
       const response = await ai.models.generateContent({
         model: "gemini-3-flash-preview",
-        contents: `Extract Japanese vocabulary words and their meanings from the following text and generate a list of 10 multiple-choice questions. 
-        If the text has fewer than 10 words, generate questions for all available words.
+        contents: `Extract ALL Japanese vocabulary words and their meanings from the following text. 
+        Generate one multiple-choice question for EVERY single word extracted. 
+        Do not limit the number of questions to 10; if there are 20 words, generate 20 questions.
         Each question should ask for the meaning of a Japanese word.
         Provide 4 options for each question, with one being the correct meaning and 3 being plausible distractors (other meanings from the list or related words).
         Return the data as a JSON array of objects with the following structure:
@@ -86,10 +87,13 @@ export default function App() {
         }
       });
 
-      const data = JSON.parse(response.text || "[]");
+      let data = JSON.parse(response.text || "[]");
       if (data.length === 0) {
         throw new Error("Could not extract any vocabulary. Please try with different text.");
       }
+
+      // Shuffle the questions on the client side for better randomization
+      data = data.sort(() => Math.random() - 0.5);
 
       setQuiz({
         questions: data,
