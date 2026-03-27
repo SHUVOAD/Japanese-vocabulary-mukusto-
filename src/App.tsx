@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { GoogleGenAI, Type } from "@google/genai";
 import { motion, AnimatePresence } from "motion/react";
 import { 
@@ -16,7 +16,8 @@ import {
   Loader2,
   ChevronRight,
   Trophy,
-  History
+  Volume2,
+  VolumeX
 } from "lucide-react";
 import { cn } from "@/src/lib/utils";
 
@@ -37,6 +38,13 @@ interface QuizState {
   userAnswers: { [key: number]: string };
 }
 
+// --- Sound Assets ---
+const SOUNDS = {
+  correct: "https://assets.mixkit.co/active_storage/sfx/2019/2019-preview.mp3",
+  incorrect: "https://assets.mixkit.co/active_storage/sfx/2017/2017-preview.mp3",
+  click: "https://assets.mixkit.co/active_storage/sfx/2568/2568-preview.mp3"
+};
+
 // --- App Component ---
 
 export default function App() {
@@ -44,23 +52,32 @@ export default function App() {
   const [isLoading, setIsLoading] = useState(false);
   const [quiz, setQuiz] = useState<QuizState | null>(null);
   const [error, setError] = useState<string | null>(null);
-
+  const [soundEnabled, setSoundEnabled] = useState(true);
+  
   const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
+
+  const playSound = (type: keyof typeof SOUNDS) => {
+    if (!soundEnabled) return;
+    const audio = new Audio(SOUNDS[type]);
+    audio.volume = 0.4;
+    audio.play().catch(() => {}); // Ignore errors if browser blocks autoplay
+  };
 
   const generateQuiz = async () => {
     if (!inputText.trim()) return;
     
     setIsLoading(true);
     setError(null);
+    playSound('click');
     
     try {
       const response = await ai.models.generateContent({
         model: "gemini-3-flash-preview",
-        contents: `Extract ALL Japanese vocabulary words and their meanings from the following text. 
-        Generate one multiple-choice question for EVERY single word extracted. 
-        Do not limit the number of questions to 10; if there are 20 words, generate 20 questions.
+        contents: `Extract Japanese vocabulary words and their meanings from the following text. 
+        Aim to generate EXACTLY 50 multiple-choice questions. 
+        If the provided text has fewer than 50 words, use all of them and then supplement the list with common Japanese N5/N4 level vocabulary words (like colors, numbers, family members, common verbs) to reach a total of 50 questions.
         Each question should ask for the meaning of a Japanese word.
-        Provide 4 options for each question, with one being the correct meaning and 3 being plausible distractors (other meanings from the list or related words).
+        Provide 4 options for each question, with one being the correct meaning and 3 being plausible distractors.
         Return the data as a JSON array of objects with the following structure:
         { "id": number, "word": string, "correctAnswer": string, "options": string[] }
         
@@ -92,7 +109,7 @@ export default function App() {
         throw new Error("Could not extract any vocabulary. Please try with different text.");
       }
 
-      // Shuffle the questions on the client side for better randomization
+      // Shuffle the questions
       data = data.sort(() => Math.random() - 0.5);
 
       setQuiz({
@@ -116,6 +133,9 @@ export default function App() {
     const currentQuestion = quiz.questions[quiz.currentIndex];
     const isCorrect = answer === currentQuestion.correctAnswer;
 
+    if (isCorrect) playSound('correct');
+    else playSound('incorrect');
+
     setQuiz(prev => {
       if (!prev) return null;
       return {
@@ -128,6 +148,7 @@ export default function App() {
   };
 
   const nextQuestion = () => {
+    playSound('click');
     setQuiz(prev => {
       if (!prev) return null;
       const isLast = prev.currentIndex === prev.questions.length - 1;
@@ -140,6 +161,7 @@ export default function App() {
   };
 
   const resetQuiz = () => {
+    playSound('click');
     setQuiz(null);
     setInputText('');
   };
@@ -147,67 +169,69 @@ export default function App() {
   const isFinished = quiz && Object.keys(quiz.userAnswers).length === quiz.questions.length && quiz.showResult && quiz.currentIndex === quiz.questions.length - 1;
 
   return (
-    <div className="min-h-screen bg-[#fafaf9] text-[#1c1917] font-sans selection:bg-orange-100">
+    <div className="min-h-screen bg-[#0a0a0a] text-white font-sans selection:bg-orange-500/30">
       {/* Header */}
-      <header className="border-b border-stone-200 bg-white/80 backdrop-blur-md sticky top-0 z-10">
-        <div className="max-w-4xl mx-auto px-6 py-4 flex items-center justify-between">
-          <div className="flex items-center gap-3">
-            <div className="w-10 h-10 bg-orange-500 rounded-xl flex items-center justify-center text-white shadow-lg shadow-orange-200">
-              <BrainCircuit size={24} />
+      <header className="border-b border-white/10 bg-black/50 backdrop-blur-lg sticky top-0 z-10">
+        <div className="max-w-4xl mx-auto px-4 py-3 flex items-center justify-between">
+          <div className="flex items-center gap-2">
+            <div className="w-8 h-8 bg-orange-600 rounded-lg flex items-center justify-center text-white shadow-lg shadow-orange-900/20">
+              <BrainCircuit size={18} />
             </div>
-            <div>
-              <h1 className="font-bold text-xl tracking-tight">VocabMaster JP</h1>
-              <p className="text-xs text-stone-500 font-medium uppercase tracking-wider">AI Japanese Learning</p>
-            </div>
+            <h1 className="font-bold text-lg tracking-tight hidden sm:block">VocabMaster JP</h1>
           </div>
-          {quiz && (
-            <div className="flex items-center gap-4">
-              <div className="text-right">
-                <p className="text-xs text-stone-400 font-bold uppercase">Progress</p>
-                <p className="font-mono text-sm">{quiz.currentIndex + 1} / {quiz.questions.length}</p>
+          
+          <div className="flex items-center gap-3">
+            <button 
+              onClick={() => setSoundEnabled(!soundEnabled)}
+              className="p-2 hover:bg-white/10 rounded-full transition-colors text-stone-400"
+            >
+              {soundEnabled ? <Volume2 size={20} /> : <VolumeX size={20} />}
+            </button>
+            {quiz && (
+              <div className="flex items-center gap-3 pl-3 border-l border-white/10">
+                <div className="text-right">
+                  <p className="font-mono text-xs text-stone-500">{quiz.currentIndex + 1}/{quiz.questions.length}</p>
+                </div>
+                <button 
+                  onClick={resetQuiz}
+                  className="p-1.5 hover:bg-white/10 rounded-lg transition-colors text-stone-400"
+                >
+                  <RefreshCcw size={18} />
+                </button>
               </div>
-              <button 
-                onClick={resetQuiz}
-                className="p-2 hover:bg-stone-100 rounded-full transition-colors text-stone-400 hover:text-stone-600"
-              >
-                <RefreshCcw size={20} />
-              </button>
-            </div>
-          )}
+            )}
+          </div>
         </div>
       </header>
 
-      <main className="max-w-4xl mx-auto px-6 py-12">
+      <main className="max-w-4xl mx-auto px-4 py-8 sm:py-12">
         <AnimatePresence mode="wait">
           {!quiz ? (
             <motion.div 
               key="input"
-              initial={{ opacity: 0, y: 20 }}
-              animate={{ opacity: 1, y: 0 }}
-              exit={{ opacity: 0, y: -20 }}
-              className="space-y-8"
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              className="space-y-6"
             >
-              <div className="space-y-2">
-                <h2 className="text-4xl font-light text-stone-800">Paste your <span className="font-serif italic text-orange-600">vocabulary</span> list</h2>
-                <p className="text-stone-500 max-w-xl">Paste a list of Japanese words and their meanings (like from your textbook or notes). Our AI will generate a personalized quiz for you.</p>
+              <div className="space-y-1">
+                <h2 className="text-3xl sm:text-4xl font-bold text-white">Learn <span className="text-orange-500">Japanese</span></h2>
+                <p className="text-stone-400 text-sm sm:text-base">Paste your word list. We'll generate 50 practice questions for you.</p>
               </div>
 
-              <div className="relative group">
+              <div className="relative">
                 <textarea
                   value={inputText}
                   onChange={(e) => setInputText(e.target.value)}
-                  placeholder="Example:&#10;okimasu - wake up&#10;nemasu - sleep&#10;hatarakimasu - work..."
-                  className="w-full h-64 p-6 bg-white border-2 border-stone-200 rounded-3xl focus:border-orange-500 focus:ring-0 transition-all resize-none text-lg leading-relaxed shadow-sm group-hover:shadow-md"
+                  placeholder="Paste words here...&#10;Example:&#10;okimasu - wake up&#10;nemasu - sleep"
+                  className="w-full h-48 sm:h-64 p-4 bg-[#141414] border border-white/10 rounded-2xl focus:border-orange-500 focus:ring-0 transition-all resize-none text-base sm:text-lg leading-relaxed shadow-inner"
                 />
-                <div className="absolute bottom-4 right-4 flex items-center gap-2">
-                  <span className="text-xs font-mono text-stone-400">{inputText.length} characters</span>
-                </div>
               </div>
 
               {error && (
-                <div className="p-4 bg-red-50 border border-red-100 text-red-600 rounded-2xl flex items-center gap-3">
-                  <XCircle size={20} />
-                  <p className="text-sm font-medium">{error}</p>
+                <div className="p-3 bg-red-500/10 border border-red-500/20 text-red-400 rounded-xl flex items-center gap-2 text-sm">
+                  <XCircle size={16} />
+                  <span>{error}</span>
                 </div>
               )}
 
@@ -215,86 +239,54 @@ export default function App() {
                 onClick={generateQuiz}
                 disabled={isLoading || !inputText.trim()}
                 className={cn(
-                  "w-full py-5 rounded-3xl font-bold text-lg flex items-center justify-center gap-3 transition-all",
+                  "w-full py-4 rounded-2xl font-bold text-lg flex items-center justify-center gap-2 transition-all active:scale-[0.98]",
                   isLoading || !inputText.trim() 
-                    ? "bg-stone-100 text-stone-400 cursor-not-allowed" 
-                    : "bg-orange-500 text-white hover:bg-orange-600 shadow-xl shadow-orange-200 active:scale-[0.98]"
+                    ? "bg-white/5 text-stone-600 cursor-not-allowed" 
+                    : "bg-orange-600 text-white hover:bg-orange-500 shadow-lg shadow-orange-900/20"
                 )}
               >
                 {isLoading ? (
                   <>
-                    <Loader2 className="animate-spin" size={24} />
-                    <span>Generating Quiz...</span>
+                    <Loader2 className="animate-spin" size={20} />
+                    <span>Generating 50 Questions...</span>
                   </>
                 ) : (
                   <>
-                    <Send size={24} />
-                    <span>Start Learning</span>
+                    <Send size={20} />
+                    <span>Start Practice</span>
                   </>
                 )}
               </button>
-
-              <div className="grid grid-cols-1 md:grid-cols-3 gap-6 pt-8">
-                {[
-                  { icon: <BookOpen className="text-blue-500" />, title: "Custom Lists", desc: "Learn exactly what you need" },
-                  { icon: <BrainCircuit className="text-purple-500" />, title: "AI Powered", desc: "Smart distractor generation" },
-                  { icon: <History className="text-green-500" />, title: "Instant Feedback", desc: "See your mistakes immediately" }
-                ].map((feature, i) => (
-                  <div key={i} className="p-6 bg-white border border-stone-100 rounded-3xl shadow-sm">
-                    <div className="mb-4">{feature.icon}</div>
-                    <h3 className="font-bold mb-1">{feature.title}</h3>
-                    <p className="text-sm text-stone-500">{feature.desc}</p>
-                  </div>
-                ))}
-              </div>
             </motion.div>
           ) : isFinished ? (
             <motion.div
               key="summary"
-              initial={{ opacity: 0, scale: 0.95 }}
+              initial={{ opacity: 0, scale: 0.98 }}
               animate={{ opacity: 1, scale: 1 }}
-              className="max-w-2xl mx-auto text-center space-y-8"
+              className="max-w-2xl mx-auto text-center space-y-6"
             >
-              <div className="relative inline-block">
-                <div className="w-32 h-32 bg-orange-100 rounded-full flex items-center justify-center text-orange-600 mx-auto">
-                  <Trophy size={64} />
-                </div>
-                <motion.div 
-                  initial={{ scale: 0 }}
-                  animate={{ scale: 1 }}
-                  transition={{ delay: 0.3, type: "spring" }}
-                  className="absolute -top-2 -right-2 bg-green-500 text-white w-12 h-12 rounded-full flex items-center justify-center font-bold border-4 border-[#fafaf9]"
-                >
-                  {Math.round((quiz.score / quiz.questions.length) * 100)}%
-                </motion.div>
+              <div className="w-24 h-24 bg-orange-500/10 rounded-full flex items-center justify-center text-orange-500 mx-auto border border-orange-500/20">
+                <Trophy size={48} />
               </div>
 
-              <div className="space-y-2">
-                <h2 className="text-4xl font-bold">Quiz Complete!</h2>
-                <p className="text-xl text-stone-500">You scored <span className="text-orange-600 font-bold">{quiz.score}</span> out of <span className="font-bold">{quiz.questions.length}</span></p>
+              <div className="space-y-1">
+                <h2 className="text-3xl font-bold">Session Complete</h2>
+                <p className="text-stone-400">Score: <span className="text-orange-500 font-bold">{quiz.score}</span> / {quiz.questions.length}</p>
               </div>
 
-              <div className="bg-white border border-stone-200 rounded-3xl overflow-hidden shadow-sm">
-                <div className="p-4 bg-stone-50 border-b border-stone-200 text-left">
-                  <h3 className="text-sm font-bold uppercase tracking-wider text-stone-400">Review your answers</h3>
-                </div>
-                <div className="divide-y divide-stone-100">
+              <div className="bg-[#141414] border border-white/10 rounded-2xl overflow-hidden max-h-[40vh] overflow-y-auto custom-scrollbar">
+                <div className="divide-y divide-white/5">
                   {quiz.questions.map((q, i) => (
-                    <div key={i} className="p-4 flex items-center justify-between text-left">
+                    <div key={i} className="p-3 flex items-center justify-between text-left text-sm">
                       <div>
-                        <p className="font-bold text-lg">{q.word}</p>
-                        <p className="text-sm text-stone-500">Correct: {q.correctAnswer}</p>
+                        <p className="font-bold japanese-text">{q.word}</p>
+                        <p className="text-stone-500 text-xs">{q.correctAnswer}</p>
                       </div>
-                      <div className="flex items-center gap-3">
-                        {quiz.userAnswers[i] === q.correctAnswer ? (
-                          <CheckCircle2 className="text-green-500" size={24} />
-                        ) : (
-                          <div className="text-right">
-                            <XCircle className="text-red-500 ml-auto" size={24} />
-                            <p className="text-xs text-red-400 mt-1">You said: {quiz.userAnswers[i]}</p>
-                          </div>
-                        )}
-                      </div>
+                      {quiz.userAnswers[i] === q.correctAnswer ? (
+                        <CheckCircle2 className="text-green-500" size={18} />
+                      ) : (
+                        <XCircle className="text-red-500" size={18} />
+                      )}
                     </div>
                   ))}
                 </div>
@@ -302,26 +294,27 @@ export default function App() {
 
               <button
                 onClick={resetQuiz}
-                className="w-full py-5 bg-stone-900 text-white rounded-3xl font-bold text-lg hover:bg-stone-800 transition-all active:scale-[0.98]"
+                className="w-full py-4 bg-white text-black rounded-2xl font-bold hover:bg-stone-200 transition-all"
               >
-                Try Another List
+                Try Again
               </button>
             </motion.div>
           ) : (
             <motion.div 
               key="quiz"
-              initial={{ opacity: 0, x: 20 }}
-              animate={{ opacity: 1, x: 0 }}
-              exit={{ opacity: 0, x: -20 }}
-              className="max-w-2xl mx-auto space-y-10"
+              initial={{ opacity: 0, y: 10 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0, y: -10 }}
+              className="max-w-2xl mx-auto space-y-8"
             >
-              <div className="text-center space-y-4">
-                <p className="text-sm font-bold text-orange-600 uppercase tracking-[0.2em]">Question {quiz.currentIndex + 1}</p>
-                <h2 className="text-6xl font-serif font-bold text-stone-800">{quiz.questions[quiz.currentIndex].word}</h2>
-                <p className="text-stone-400 italic">What is the meaning of this word?</p>
+              <div className="text-center space-y-2">
+                <h2 className="text-5xl sm:text-6xl font-bold text-white japanese-text tracking-tight">
+                  {quiz.questions[quiz.currentIndex].word}
+                </h2>
+                <p className="text-stone-500 text-sm">Select the correct meaning</p>
               </div>
 
-              <div className="grid grid-cols-1 gap-4">
+              <div className="grid grid-cols-1 gap-3">
                 {quiz.questions[quiz.currentIndex].options.map((option, i) => {
                   const isSelected = quiz.userAnswers[quiz.currentIndex] === option;
                   const isCorrect = option === quiz.questions[quiz.currentIndex].correctAnswer;
@@ -333,21 +326,14 @@ export default function App() {
                       onClick={() => handleAnswer(option)}
                       disabled={showFeedback}
                       className={cn(
-                        "p-6 text-left rounded-3xl border-2 transition-all text-lg font-medium relative overflow-hidden group",
-                        !showFeedback && "border-stone-200 hover:border-orange-500 hover:bg-orange-50/50 hover:translate-x-1",
-                        showFeedback && isCorrect && "border-green-500 bg-green-50 text-green-700",
-                        showFeedback && isSelected && !isCorrect && "border-red-500 bg-red-50 text-red-700",
-                        showFeedback && !isSelected && !isCorrect && "border-stone-100 opacity-50"
+                        "p-5 text-left rounded-2xl border transition-all text-base sm:text-lg font-medium",
+                        !showFeedback && "border-white/10 bg-white/5 hover:border-orange-500/50 hover:bg-white/10",
+                        showFeedback && isCorrect && "border-green-500/50 bg-green-500/10 text-green-400",
+                        showFeedback && isSelected && !isCorrect && "border-red-500/50 bg-red-500/10 text-red-400",
+                        showFeedback && !isSelected && !isCorrect && "border-transparent opacity-30"
                       )}
                     >
-                      <div className="flex items-center justify-between relative z-10">
-                        <span>{option}</span>
-                        {showFeedback && isCorrect && <CheckCircle2 size={24} />}
-                        {showFeedback && isSelected && !isCorrect && <XCircle size={24} />}
-                      </div>
-                      {!showFeedback && (
-                        <div className="absolute inset-0 bg-orange-500/5 translate-x-[-100%] group-hover:translate-x-0 transition-transform duration-300" />
-                      )}
+                      {option}
                     </button>
                   );
                 })}
@@ -356,16 +342,15 @@ export default function App() {
               <AnimatePresence>
                 {quiz.showResult && (
                   <motion.div
-                    initial={{ opacity: 0, y: 10 }}
-                    animate={{ opacity: 1, y: 0 }}
-                    className="pt-4"
+                    initial={{ opacity: 0, scale: 0.98 }}
+                    animate={{ opacity: 1, scale: 1 }}
                   >
                     <button
                       onClick={nextQuestion}
-                      className="w-full py-5 bg-stone-900 text-white rounded-3xl font-bold text-lg flex items-center justify-center gap-2 hover:bg-stone-800 transition-all group"
+                      className="w-full py-4 bg-orange-600 text-white rounded-2xl font-bold flex items-center justify-center gap-2 hover:bg-orange-500 transition-all"
                     >
-                      <span>{quiz.currentIndex === quiz.questions.length - 1 ? "Finish Quiz" : "Next Question"}</span>
-                      <ChevronRight className="group-hover:translate-x-1 transition-transform" />
+                      <span>{quiz.currentIndex === quiz.questions.length - 1 ? "Finish" : "Next Question"}</span>
+                      <ChevronRight size={20} />
                     </button>
                   </motion.div>
                 )}
@@ -374,12 +359,6 @@ export default function App() {
           )}
         </AnimatePresence>
       </main>
-
-      {/* Background elements */}
-      <div className="fixed inset-0 -z-10 overflow-hidden pointer-events-none">
-        <div className="absolute top-[-10%] right-[-10%] w-[40%] h-[40%] bg-orange-100/30 blur-[120px] rounded-full" />
-        <div className="absolute bottom-[-10%] left-[-10%] w-[40%] h-[40%] bg-blue-100/20 blur-[120px] rounded-full" />
-      </div>
     </div>
   );
 }
