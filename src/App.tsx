@@ -17,7 +17,8 @@ import {
   ChevronRight,
   Trophy,
   Volume2,
-  VolumeX
+  VolumeX,
+  Image as ImageIcon
 } from "lucide-react";
 import { cn } from "@/src/lib/utils";
 
@@ -53,6 +54,8 @@ export default function App() {
   const [quiz, setQuiz] = useState<QuizState | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [soundEnabled, setSoundEnabled] = useState(true);
+  const [isExtracting, setIsExtracting] = useState(false);
+  const fileInputRef = useRef<HTMLInputElement>(null);
   
   const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
 
@@ -76,10 +79,12 @@ export default function App() {
         contents: `Extract Japanese vocabulary words and their meanings from the following text. 
         Aim to generate EXACTLY 50 multiple-choice questions. 
         If the provided text has fewer than 50 words, use all of them and then supplement the list with common Japanese N5/N4 level vocabulary words (like colors, numbers, family members, common verbs) to reach a total of 50 questions.
-        Each question should ask for the meaning of a Japanese word.
-        Provide 4 options for each question, with one being the correct meaning and 3 being plausible distractors.
+        IMPORTANT: Do NOT use any Kanji in the questions or options. Use ONLY Hiragana, Katakana, or Romaji for the Japanese words.
+        Each question should ask for the Japanese word (Hiragana/Katakana/Romaji) for a given Bengali meaning.
+        Provide 4 options for each question, with one being the correct Japanese word and 3 being plausible distractors.
         Return the data as a JSON array of objects with the following structure:
         { "id": number, "word": string, "correctAnswer": string, "options": string[] }
+        Note: In this case, "word" will be the Bengali meaning, and "correctAnswer" and "options" will be Japanese words.
         
         Text:
         ${inputText}`,
@@ -166,6 +171,60 @@ export default function App() {
     setInputText('');
   };
 
+  const handleImageUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const files = e.target.files;
+    if (!files || files.length === 0) return;
+
+    setIsExtracting(true);
+    setError(null);
+    playSound('click');
+
+    try {
+      const results: string[] = [];
+      
+      for (let i = 0; i < files.length; i++) {
+        const file = files[i];
+        const base64Data = await new Promise<string>((resolve) => {
+          const reader = new FileReader();
+          reader.onload = () => resolve((reader.result as string).split(',')[1]);
+          reader.readAsDataURL(file);
+        });
+
+        const response = await ai.models.generateContent({
+          model: "gemini-3-flash-preview",
+          contents: [
+            {
+              inlineData: {
+                data: base64Data,
+                mimeType: file.type
+              }
+            },
+            {
+              text: "Extract all Japanese vocabulary words from this image. For each word, provide its reading in Hiragana/Katakana ONLY (strictly NO KANJI) and its Bengali meaning. Format the output as a simple list where each line is 'JapaneseWord - BengaliMeaning'. Do not include any other text or headers."
+            }
+          ]
+        });
+
+        const extractedText = response.text || "";
+        if (extractedText.trim()) {
+          results.push(extractedText.trim());
+        }
+      }
+
+      if (results.length > 0) {
+        const combinedText = results.join('\n');
+        setInputText(prev => prev ? `${prev}\n${combinedText}` : combinedText);
+      } else {
+        setError("আরে ভাই, ছবিগুলো থেকে তো কিছুই পেলাম না! একটু পরিষ্কার ছবি দে তো।");
+      }
+      setIsExtracting(false);
+    } catch (err) {
+      console.error(err);
+      setError("ধুর শালা! ছবিগুলো প্রসেস করতে গিয়ে ঝামেলা হয়ে গেল। আবার ট্রাই কর।");
+      setIsExtracting(false);
+    }
+  };
+
   const isFinished = quiz && Object.keys(quiz.userAnswers).length === quiz.questions.length && quiz.showResult && quiz.currentIndex === quiz.questions.length - 1;
 
   return (
@@ -177,7 +236,10 @@ export default function App() {
             <div className="w-8 h-8 bg-orange-600 rounded-lg flex items-center justify-center text-white shadow-lg shadow-orange-900/20">
               <BrainCircuit size={18} />
             </div>
-            <h1 className="font-bold text-lg tracking-tight">Oi shuvo tor vocabulary ses hoice ? 🦒</h1>
+            <div>
+              <h1 className="font-bold text-lg tracking-tight">Oi shuvo tor vocabulary ses hoice ? 🦒</h1>
+              <p className="text-[10px] text-stone-500 font-mono">বেশি পকপক না করে পড়া শুরু কর!</p>
+            </div>
           </div>
           
           <div className="flex items-center gap-3">
@@ -216,7 +278,10 @@ export default function App() {
             >
               <div className="space-y-1">
                 <h2 className="text-2xl sm:text-3xl font-bold text-white">প্র্যাকটিস করার জন্য <span className="text-orange-500">Next</span> এ বাটনে গুতা দে</h2>
-                <p className="text-stone-400 text-sm sm:text-base">নিচে তোর জাপানিজ শব্দগুলো পেস্ট কর, আমি ৫০টা প্রশ্ন বানিয়ে দিচ্ছি।</p>
+                <p className="text-stone-400 text-sm sm:text-base">
+                  নিচে তোর জাপানিজ শব্দগুলো পেস্ট কর, আমি ৫০টা প্রশ্ন বানিয়ে দিচ্ছি। 
+                  অথবা অনেকগুলো ছবি একসাথে সিলেক্ট করে <span className="text-orange-500 font-bold">Photos Import</span> এ ক্লিক কর।
+                </p>
               </div>
 
               <div className="relative">
@@ -226,6 +291,30 @@ export default function App() {
                   placeholder="এখানে তোর শব্দগুলো পেস্ট কর...&#10;যেমন:&#10;okimasu - wake up&#10;nemasu - sleep"
                   className="w-full h-48 sm:h-64 p-4 bg-[#141414] border border-white/10 rounded-2xl focus:border-orange-500 focus:ring-0 transition-all resize-none text-base sm:text-lg leading-relaxed shadow-inner"
                 />
+                
+                <div className="absolute bottom-4 right-4 flex gap-2">
+                  <input 
+                    type="file" 
+                    accept="image/*" 
+                    multiple
+                    className="hidden" 
+                    ref={fileInputRef}
+                    onChange={handleImageUpload}
+                  />
+                  <button
+                    onClick={() => fileInputRef.current?.click()}
+                    disabled={isExtracting}
+                    className="p-3 bg-white/5 hover:bg-white/10 border border-white/10 rounded-xl text-stone-400 hover:text-white transition-all flex items-center gap-2"
+                    title="Upload Multiple Images"
+                  >
+                    {isExtracting ? (
+                      <Loader2 className="animate-spin" size={20} />
+                    ) : (
+                      <ImageIcon size={20} />
+                    )}
+                    <span className="text-[10px] font-bold">Photos Import</span>
+                  </button>
+                </div>
               </div>
 
               {error && (
@@ -248,12 +337,12 @@ export default function App() {
                 {isLoading ? (
                   <>
                     <Loader2 className="animate-spin" size={20} />
-                    <span>Generating 50 Questions...</span>
+                    <span>তোর জন্য প্রশ্ন বানাচ্ছি, একটু সবুর কর...</span>
                   </>
                 ) : (
                   <>
                     <Send size={20} />
-                    <span>Next</span>
+                    <span>Next এ গুতা দে</span>
                   </>
                 )}
               </button>
@@ -270,8 +359,8 @@ export default function App() {
               </div>
 
               <div className="space-y-1">
-                <h2 className="text-3xl font-bold">Session Complete</h2>
-                <p className="text-stone-400">Score: <span className="text-orange-500 font-bold">{quiz.score}</span> / {quiz.questions.length}</p>
+                <h2 className="text-3xl font-bold">সাবাস বেটা! তুই তো দেখি হিরো হয়ে গেলি!</h2>
+                <p className="text-stone-400">তোর স্কোর: <span className="text-orange-500 font-bold">{quiz.score}</span> / {quiz.questions.length}</p>
               </div>
 
               <div className="bg-[#141414] border border-white/10 rounded-2xl overflow-hidden max-h-[40vh] overflow-y-auto custom-scrollbar">
@@ -296,7 +385,7 @@ export default function App() {
                 onClick={resetQuiz}
                 className="w-full py-4 bg-white text-black rounded-2xl font-bold hover:bg-stone-200 transition-all"
               >
-                Try Again
+                আবার খেলবি?
               </button>
             </motion.div>
           ) : (
@@ -311,7 +400,7 @@ export default function App() {
                 <h2 className="text-5xl sm:text-6xl font-bold text-white japanese-text tracking-tight">
                   {quiz.questions[quiz.currentIndex].word}
                 </h2>
-                <p className="text-stone-500 text-sm">Select the correct meaning</p>
+                <p className="text-stone-500 text-sm">সঠিক মানে কোনটা? বল তো দেখি...</p>
               </div>
 
               <div className="grid grid-cols-1 gap-3">
@@ -349,7 +438,7 @@ export default function App() {
                       onClick={nextQuestion}
                       className="w-full py-4 bg-orange-600 text-white rounded-2xl font-bold flex items-center justify-center gap-2 hover:bg-orange-500 transition-all"
                     >
-                      <span>{quiz.currentIndex === quiz.questions.length - 1 ? "Finish" : "Next Question"}</span>
+                      <span>{quiz.currentIndex === quiz.questions.length - 1 ? "শেষ কর" : "পরের প্রশ্ন"}</span>
                       <ChevronRight size={20} />
                     </button>
                   </motion.div>
