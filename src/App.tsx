@@ -177,7 +177,7 @@ export default function App() {
             <div className="w-8 h-8 bg-orange-600 rounded-lg flex items-center justify-center text-white shadow-lg shadow-orange-900/20">
               <BrainCircuit size={18} />
             </div>
-            <h1 className="font-bold text-lg tracking-tight hidden sm:block">VocabMaster JP</h1>
+            <h1 className="font-bold text-lg tracking-tight">Oi shuvo tor vocabulary ses hoice ? 🦒</h1>
           </div>
           
           <div className="flex items-center gap-3">
@@ -215,15 +215,15 @@ export default function App() {
               className="space-y-6"
             >
               <div className="space-y-1">
-                <h2 className="text-3xl sm:text-4xl font-bold text-white">Learn <span className="text-orange-500">Japanese</span></h2>
-                <p className="text-stone-400 text-sm sm:text-base">Paste your word list. We'll generate 50 practice questions for you.</p>
+                <h2 className="text-2xl sm:text-3xl font-bold text-white">প্র্যাকটিস করার জন্য <span className="text-orange-500">Next</span> এ বাটনে গুতা দে</h2>
+                <p className="text-stone-400 text-sm sm:text-base">নিচে তোর জাপানিজ শব্দগুলো পেস্ট কর, আমি ৫০টা প্রশ্ন বানিয়ে দিচ্ছি।</p>
               </div>
 
               <div className="relative">
                 <textarea
                   value={inputText}
                   onChange={(e) => setInputText(e.target.value)}
-                  placeholder="Paste words here...&#10;Example:&#10;okimasu - wake up&#10;nemasu - sleep"
+                  placeholder="এখানে তোর শব্দগুলো পেস্ট কর...&#10;যেমন:&#10;okimasu - wake up&#10;nemasu - sleep"
                   className="w-full h-48 sm:h-64 p-4 bg-[#141414] border border-white/10 rounded-2xl focus:border-orange-500 focus:ring-0 transition-all resize-none text-base sm:text-lg leading-relaxed shadow-inner"
                 />
               </div>
@@ -253,7 +253,7 @@ export default function App() {
                 ) : (
                   <>
                     <Send size={20} />
-                    <span>Start Practice</span>
+                    <span>Next</span>
                   </>
                 )}
               </button>
