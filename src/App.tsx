@@ -77,16 +77,17 @@ export default function App() {
       const response = await ai.models.generateContent({
         model: "gemini-3-flash-preview",
         contents: `Extract Japanese vocabulary words and their meanings from the following text. 
-        Aim to generate EXACTLY 50 multiple-choice questions. 
-        If the provided text has fewer than 50 words, use all of them and then supplement the list with common Japanese N5/N4 level vocabulary words (like colors, numbers, family members, common verbs) to reach a total of 50 questions.
-        IMPORTANT: Do NOT use any Kanji in the questions or options. Use ONLY Hiragana, Katakana, or Romaji for the Japanese words.
+        Generate multiple-choice questions ONLY for the words provided in the text. DO NOT add any extra words that are not in the text.
         
-        MIX THE QUESTIONS:
-        - Roughly half the questions should ask for the Japanese word (Hiragana/Katakana/Romaji) for a given Bengali meaning.
-        - The other half should ask for the Bengali meaning for a given Japanese word.
+        IMPORTANT: 
+        1. Do NOT use any Kanji. Use ONLY Hiragana, Katakana, or Romaji.
+        2. For each word in the text, create a question.
+        3. MIX THE QUESTION TYPES:
+           - Some questions ask for the Japanese word for a given Bengali meaning.
+           - Some questions ask for the Bengali meaning for a given Japanese word.
+        4. Provide 4 options for each question (1 correct, 3 distractors).
         
-        Provide 4 options for each question, with one being the correct answer and 3 being plausible distractors.
-        Return the data as a JSON array of objects with the following structure:
+        Return the data as a JSON array of objects:
         { "id": number, "word": string, "correctAnswer": string, "options": string[] }
         
         Text:
@@ -114,7 +115,7 @@ export default function App() {
 
       let data = JSON.parse(response.text || "[]");
       if (data.length === 0) {
-        throw new Error("আরে ভাই, কিছুই তো পেলাম না! একটু ভালো করে টেক্সট দে তো।");
+        throw new Error("আরে ভাই, এই টেক্সট থেকে তো কোনো শব্দ খুঁজে পেলাম না! ঠিকঠাক লিখেছিস তো?");
       }
 
       // Shuffle the questions AND their options
@@ -132,7 +133,7 @@ export default function App() {
       });
     } catch (err) {
       console.error(err);
-      setError("Failed to generate quiz. Please check your input and try again.");
+      setError(err instanceof Error ? err.message : "ধুর শালা! প্রশ্ন বানাতে গিয়ে ঝামেলা হয়ে গেল। আবার ট্রাই কর।");
     } finally {
       setIsLoading(false);
     }
@@ -206,7 +207,7 @@ export default function App() {
               }
             },
             {
-              text: "Extract all Japanese vocabulary words from this image. For each word, provide its reading in Hiragana/Katakana ONLY (strictly NO KANJI) and its Bengali meaning. Format the output as a simple list where each line is 'JapaneseWord - BengaliMeaning'. Do not include any other text or headers."
+              text: "Extract all Japanese vocabulary words from this image. For each word, provide its reading in Hiragana/Katakana ONLY (strictly NO KANJI) and its Bengali meaning. Format the output as a simple list where each line is 'JapaneseWord - BengaliMeaning'. Be extremely accurate. If a word is unclear, skip it. Do not hallucinate words that are not there."
             }
           ]
         });
@@ -299,6 +300,26 @@ export default function App() {
                 />
                 
                 <div className="absolute bottom-4 right-4 flex gap-2">
+                  <button
+                    onClick={() => {
+                      setInputText('ohayou - good morning\nkonnichiwa - hello\narigatou - thank you\nsayonara - goodbye\nhai - yes\niie - no\nsumimasen - excuse me\ngomen nasai - sorry\noishii - delicious\nkawaii - cute');
+                      playSound('click');
+                    }}
+                    className="p-3 bg-white/5 hover:bg-orange-500/10 border border-white/10 rounded-xl text-stone-400 hover:text-orange-400 transition-all"
+                    title="Load Sample Words"
+                  >
+                    <BookOpen size={20} />
+                  </button>
+                  <button
+                    onClick={() => {
+                      setInputText('');
+                      playSound('click');
+                    }}
+                    className="p-3 bg-white/5 hover:bg-red-500/10 border border-white/10 rounded-xl text-stone-400 hover:text-red-400 transition-all"
+                    title="Clear All"
+                  >
+                    <RefreshCcw size={20} />
+                  </button>
                   <input 
                     type="file" 
                     accept="image/*" 
