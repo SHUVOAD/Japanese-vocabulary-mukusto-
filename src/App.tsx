@@ -80,11 +80,14 @@ export default function App() {
         Aim to generate EXACTLY 50 multiple-choice questions. 
         If the provided text has fewer than 50 words, use all of them and then supplement the list with common Japanese N5/N4 level vocabulary words (like colors, numbers, family members, common verbs) to reach a total of 50 questions.
         IMPORTANT: Do NOT use any Kanji in the questions or options. Use ONLY Hiragana, Katakana, or Romaji for the Japanese words.
-        Each question should ask for the Japanese word (Hiragana/Katakana/Romaji) for a given Bengali meaning.
-        Provide 4 options for each question, with one being the correct Japanese word and 3 being plausible distractors.
+        
+        MIX THE QUESTIONS:
+        - Roughly half the questions should ask for the Japanese word (Hiragana/Katakana/Romaji) for a given Bengali meaning.
+        - The other half should ask for the Bengali meaning for a given Japanese word.
+        
+        Provide 4 options for each question, with one being the correct answer and 3 being plausible distractors.
         Return the data as a JSON array of objects with the following structure:
         { "id": number, "word": string, "correctAnswer": string, "options": string[] }
-        Note: In this case, "word" will be the Bengali meaning, and "correctAnswer" and "options" will be Japanese words.
         
         Text:
         ${inputText}`,
@@ -111,14 +114,17 @@ export default function App() {
 
       let data = JSON.parse(response.text || "[]");
       if (data.length === 0) {
-        throw new Error("Could not extract any vocabulary. Please try with different text.");
+        throw new Error("আরে ভাই, কিছুই তো পেলাম না! একটু ভালো করে টেক্সট দে তো।");
       }
 
-      // Shuffle the questions
-      data = data.sort(() => Math.random() - 0.5);
+      // Shuffle the questions AND their options
+      const shuffledData = data.map((q: any) => ({
+        ...q,
+        options: [...q.options].sort(() => Math.random() - 0.5)
+      })).sort(() => Math.random() - 0.5);
 
       setQuiz({
-        questions: data,
+        questions: shuffledData,
         currentIndex: 0,
         score: 0,
         showResult: false,
