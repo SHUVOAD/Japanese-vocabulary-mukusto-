@@ -1,5 +1,5 @@
 {
-  "name": "Oi shuvo tor vocabulary ses hoice ? 🦒",
-  "description": "An AI-powered app to learn Japanese vocabulary by generating MCQs from your own word lists.",
-  "requestFramePermissions": []
+  "name": "Nihongo Master - জাপানি ভাষা শিখুন",
+  "description": "একটি প্রফেশনাল জাপানি vocabulary প্র্যাকটিস ওয়েবসাইট। ছবি থেকে শব্দ শিখুন, MCQ পরীক্ষা দিন এবং ভয়েস অ্যাসিস্ট্যান্টের সাথে কথা বলুন।",
+  "requestFramePermissions": ["microphone"]
 }

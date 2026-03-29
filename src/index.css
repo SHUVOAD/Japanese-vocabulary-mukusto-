@@ -1,26 +1,44 @@
-@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=Noto+Sans+JP:wght@400;500;700&family=JetBrains+Mono:wght@400;500&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Outfit:wght@400;600;700&display=swap');
 @import "tailwindcss";
 
 @theme {
-  --font-sans: "Inter", "Noto Sans JP", ui-sans-serif, system-ui, sans-serif;
-  --font-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, monospace;
-}
-
-:root {
-  --bg: #0a0a0a;
-  --card-bg: #141414;
-  --border: #262626;
-  --text-primary: #ffffff;
-  --text-secondary: #a3a3a3;
-  --accent: #f97316;
+  --font-sans: "Inter", ui-sans-serif, system-ui, sans-serif;
+  --font-display: "Outfit", sans-serif;
 }
 
 body {
-  background-color: var(--bg);
-  color: var(--text-primary);
+  background-color: #0a0a0a;
+  color: #e5e7eb;
   -webkit-font-smoothing: antialiased;
 }
 
-.japanese-text {
-  font-family: "Noto Sans JP", sans-serif;
+/* Custom Scrollbar */
+::-webkit-scrollbar {
+  width: 8px;
+}
+
+::-webkit-scrollbar-track {
+  background: #0a0a0a;
+}
+
+::-webkit-scrollbar-thumb {
+  background: #262626;
+  border-radius: 10px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: #404040;
+}
+
+/* Glassmorphism */
+.glass {
+  background: rgba(20, 20, 20, 0.7);
+  backdrop-filter: blur(12px);
+  border: 1px solid rgba(255, 255, 255, 0.05);
+}
+
+.text-gradient {
+  background: linear-gradient(to right, #f97316, #fb923c);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
 }

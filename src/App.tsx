@@ -1,97 +1,90 @@
-/**
- * @license
- * SPDX-License-Identifier: Apache-2.0
- */
-
-import React, { useState, useEffect, useRef } from 'react';
-import { GoogleGenAI, Type } from "@google/genai";
-import { motion, AnimatePresence } from "motion/react";
+import React, { useState, useEffect, useCallback, useRef } from 'react';
+import { GoogleGenAI, Type, Modality } from "@google/genai";
 import { 
+  Upload, 
   BookOpen, 
-  BrainCircuit, 
+  Mic, 
+  MicOff, 
+  Volume2, 
   CheckCircle2, 
   XCircle, 
-  RefreshCcw, 
-  Send, 
-  Loader2,
+  RefreshCw, 
+  Image as ImageIcon,
   ChevronRight,
-  Trophy,
-  Volume2,
-  VolumeX,
-  Image as ImageIcon
-} from "lucide-react";
-import { cn } from "@/src/lib/utils";
+  BrainCircuit,
+  Languages,
+  Loader2,
+  Trash2
+} from 'lucide-react';
+import { motion, AnimatePresence } from 'motion/react';
+import { useDropzone } from 'react-dropzone';
 
 // --- Types ---
+interface Vocabulary {
+  japanese: string; // Hiragana/Katakana only
+  bangla: string;
+  english: string;
+  id: string;
+}
 
 interface Question {
-  id: number;
-  word: string;
-  correctAnswer: string;
+  id: string;
+  word: Vocabulary;
+  questionText: string;
   options: string[];
+  correctAnswer: string;
+  type: 'jp-to-bn' | 'bn-to-jp' | 'jp-to-en' | 'en-to-jp';
 }
 
-interface QuizState {
-  questions: Question[];
-  currentIndex: number;
-  score: number;
-  showResult: boolean;
-  userAnswers: { [key: number]: string };
-}
-
-// --- Sound Assets ---
-const SOUNDS = {
-  correct: "https://assets.mixkit.co/active_storage/sfx/2019/2019-preview.mp3",
-  incorrect: "https://assets.mixkit.co/active_storage/sfx/2017/2017-preview.mp3",
-  click: "https://assets.mixkit.co/active_storage/sfx/2568/2568-preview.mp3"
-};
-
-// --- App Component ---
+// --- Constants ---
+const GEMINI_MODEL = "gemini-3-flash-preview";
+const TTS_MODEL = "gemini-2.5-flash-preview-tts";
 
 export default function App() {
-  const [inputText, setInputText] = useState('');
-  const [isLoading, setIsLoading] = useState(false);
-  const [quiz, setQuiz] = useState<QuizState | null>(null);
-  const [error, setError] = useState<string | null>(null);
-  const [soundEnabled, setSoundEnabled] = useState(true);
-  const [isExtracting, setIsExtracting] = useState(false);
-  const fileInputRef = useRef<HTMLInputElement>(null);
+  const [vocabList, setVocabList] = useState<Vocabulary[]>([]);
+  const [isProcessing, setIsProcessing] = useState(false);
+  const [currentView, setCurrentView] = useState<'upload' | 'practice' | 'list'>('upload');
+  const [questions, setQuestions] = useState<Question[]>([]);
+  const [quizIndex, setQuizIndex] = useState(0);
+  const [score, setScore] = useState(0);
+  const [quizFinished, setQuizFinished] = useState(false);
+  const [selectedAnswer, setSelectedAnswer] = useState<string | null>(null);
+  const [isCorrect, setIsCorrect] = useState<boolean | null>(null);
   
-  const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
+  // Voice Assistant State
+  const [isListening, setIsListening] = useState(false);
+  const [assistantResponse, setAssistantResponse] = useState("");
+  const [isSpeaking, setIsSpeaking] = useState(false);
+  const audioRef = useRef<HTMLAudioElement | null>(null);
 
-  const playSound = (type: keyof typeof SOUNDS) => {
-    if (!soundEnabled) return;
-    const audio = new Audio(SOUNDS[type]);
-    audio.volume = 0.4;
-    audio.play().catch(() => {}); // Ignore errors if browser blocks autoplay
-  };
+  const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY! });
 
-  const generateQuiz = async () => {
-    if (!inputText.trim()) return;
-    
-    setIsLoading(true);
-    setError(null);
-    playSound('click');
-    
+  // --- Image Processing ---
+  const processImages = async (files: File[]) => {
+    setIsProcessing(true);
     try {
+      const imageParts = await Promise.all(
+        files.map(async (file) => {
+          const base64 = await fileToBase64(file);
+          return {
+            inlineData: {
+              data: base64.split(',')[1],
+              mimeType: file.type,
+            },
+          };
+        })
+      );
+
       const response = await ai.models.generateContent({
-        model: "gemini-3-flash-preview",
-        contents: `Extract Japanese vocabulary words and their meanings from the following text. 
-        Generate multiple-choice questions ONLY for the words provided in the text. DO NOT add any extra words that are not in the text.
-        
-        IMPORTANT: 
-        1. Do NOT use any Kanji. Use ONLY Hiragana, Katakana, or Romaji.
-        2. For each word in the text, create a question.
-        3. MIX THE QUESTION TYPES:
-           - Some questions ask for the Japanese word for a given Bengali meaning.
-           - Some questions ask for the Bengali meaning for a given Japanese word.
-        4. Provide 4 options for each question (1 correct, 3 distractors).
-        
-        Return the data as a JSON array of objects:
-        { "id": number, "word": string, "correctAnswer": string, "options": string[] }
-        
-        Text:
-        ${inputText}`,
+        model: GEMINI_MODEL,
+        contents: [
+          {
+            parts: [
+              ...imageParts,
+              { text: "Extract all Japanese vocabulary from these images. Provide the Japanese word (ONLY Hiragana/Katakana, NO Kanji), its Bangla meaning, and its English meaning. Return as a JSON array of objects with keys: japanese, bangla, english." }
+            ]
+          }
+        ],
         config: {
           responseMimeType: "application/json",
           responseSchema: {
@@ -99,382 +92,474 @@ export default function App() {
             items: {
               type: Type.OBJECT,
               properties: {
-                id: { type: Type.INTEGER },
-                word: { type: Type.STRING },
-                correctAnswer: { type: Type.STRING },
-                options: { 
-                  type: Type.ARRAY,
-                  items: { type: Type.STRING }
-                }
+                japanese: { type: Type.STRING },
+                bangla: { type: Type.STRING },
+                english: { type: Type.STRING },
               },
-              required: ["id", "word", "correctAnswer", "options"]
+              required: ["japanese", "bangla", "english"]
             }
           }
         }
       });
 
-      let data = JSON.parse(response.text || "[]");
-      if (data.length === 0) {
-        throw new Error("আরে ভাই, এই টেক্সট থেকে তো কোনো শব্দ খুঁজে পেলাম না! ঠিকঠাক লিখেছিস তো?");
+      const newVocab: Vocabulary[] = JSON.parse(response.text || "[]").map((v: any) => ({
+        ...v,
+        id: Math.random().toString(36).substr(2, 9)
+      }));
+
+      setVocabList(prev => [...prev, ...newVocab]);
+      setCurrentView('list');
+    } catch (error) {
+      console.error("Error processing images:", error);
+      alert("ছবি প্রসেস করতে সমস্যা হয়েছে। আবার চেষ্টা করুন।");
+    } finally {
+      setIsProcessing(false);
+    }
+  };
+
+  const fileToBase64 = (file: File): Promise<string> => {
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.readAsDataURL(file);
+      reader.onload = () => resolve(reader.result as string);
+      reader.onerror = error => reject(error);
+    });
+  };
+
+  // --- Quiz Logic ---
+  const generateQuiz = useCallback(() => {
+    if (vocabList.length < 4) return;
+
+    const newQuestions: Question[] = [];
+    const types: Question['type'][] = ['jp-to-bn', 'bn-to-jp', 'jp-to-en', 'en-to-jp'];
+
+    // Generate up to 50 questions or based on vocab size
+    const count = Math.min(50, vocabList.length * 2);
+    
+    for (let i = 0; i < count; i++) {
+      const word = vocabList[Math.floor(Math.random() * vocabList.length)];
+      const type = types[Math.floor(Math.random() * types.length)];
+      
+      let correctAnswer = "";
+      let questionText = "";
+      let options: string[] = [];
+
+      if (type === 'jp-to-bn') {
+        correctAnswer = word.bangla;
+        questionText = word.japanese;
+        options = [correctAnswer, ...getRandomOptions(vocabList, 'bangla', correctAnswer)];
+      } else if (type === 'bn-to-jp') {
+        correctAnswer = word.japanese;
+        questionText = word.bangla;
+        options = [correctAnswer, ...getRandomOptions(vocabList, 'japanese', correctAnswer)];
+      } else if (type === 'jp-to-en') {
+        correctAnswer = word.english;
+        questionText = word.japanese;
+        options = [correctAnswer, ...getRandomOptions(vocabList, 'english', correctAnswer)];
+      } else {
+        correctAnswer = word.japanese;
+        questionText = word.english;
+        options = [correctAnswer, ...getRandomOptions(vocabList, 'japanese', correctAnswer)];
       }
 
-      // Shuffle the questions AND their options
-      const shuffledData = data.map((q: any) => ({
-        ...q,
-        options: [...q.options].sort(() => Math.random() - 0.5)
-      })).sort(() => Math.random() - 0.5);
-
-      setQuiz({
-        questions: shuffledData,
-        currentIndex: 0,
-        score: 0,
-        showResult: false,
-        userAnswers: {}
+      newQuestions.push({
+        id: Math.random().toString(36).substr(2, 9),
+        word,
+        questionText,
+        type,
+        correctAnswer,
+        options: shuffleArray(options)
       });
-    } catch (err) {
-      console.error(err);
-      setError(err instanceof Error ? err.message : "ধুর শালা! প্রশ্ন বানাতে গিয়ে ঝামেলা হয়ে গেল। আবার ট্রাই কর।");
-    } finally {
-      setIsLoading(false);
     }
+
+    setQuestions(newQuestions);
+    setQuizIndex(0);
+    setScore(0);
+    setQuizFinished(false);
+    setSelectedAnswer(null);
+    setIsCorrect(null);
+    setCurrentView('practice');
+  }, [vocabList]);
+
+  const getRandomOptions = (list: Vocabulary[], key: keyof Vocabulary, exclude: string) => {
+    return list
+      .filter(v => v[key] !== exclude)
+      .sort(() => 0.5 - Math.random())
+      .slice(0, 3)
+      .map(v => v[key] as string);
+  };
+
+  const shuffleArray = (array: any[]) => {
+    return [...array].sort(() => Math.random() - 0.5);
   };
 
   const handleAnswer = (answer: string) => {
-    if (!quiz || quiz.showResult) return;
+    if (selectedAnswer) return;
+    
+    setSelectedAnswer(answer);
+    const correct = answer === questions[quizIndex].correctAnswer;
+    setIsCorrect(correct);
+    if (correct) setScore(s => s + 1);
 
-    const currentQuestion = quiz.questions[quiz.currentIndex];
-    const isCorrect = answer === currentQuestion.correctAnswer;
-
-    if (isCorrect) playSound('correct');
-    else playSound('incorrect');
-
-    setQuiz(prev => {
-      if (!prev) return null;
-      return {
-        ...prev,
-        score: isCorrect ? prev.score + 1 : prev.score,
-        userAnswers: { ...prev.userAnswers, [prev.currentIndex]: answer },
-        showResult: true
-      };
-    });
+    setTimeout(() => {
+      if (quizIndex < questions.length - 1) {
+        setQuizIndex(i => i + 1);
+        setSelectedAnswer(null);
+        setIsCorrect(null);
+      } else {
+        setQuizFinished(true);
+      }
+    }, 1500);
   };
 
-  const nextQuestion = () => {
-    playSound('click');
-    setQuiz(prev => {
-      if (!prev) return null;
-      const isLast = prev.currentIndex === prev.questions.length - 1;
-      return {
-        ...prev,
-        currentIndex: isLast ? prev.currentIndex : prev.currentIndex + 1,
-        showResult: false
-      };
-    });
-  };
-
-  const resetQuiz = () => {
-    playSound('click');
-    setQuiz(null);
-    setInputText('');
-  };
-
-  const handleImageUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const files = e.target.files;
-    if (!files || files.length === 0) return;
-
-    setIsExtracting(true);
-    setError(null);
-    playSound('click');
-
+  // --- Voice Assistant ---
+  const speak = async (text: string) => {
+    setIsSpeaking(true);
     try {
-      const results: string[] = [];
-      
-      for (let i = 0; i < files.length; i++) {
-        const file = files[i];
-        const base64Data = await new Promise<string>((resolve) => {
-          const reader = new FileReader();
-          reader.onload = () => resolve((reader.result as string).split(',')[1]);
-          reader.readAsDataURL(file);
-        });
-
-        const response = await ai.models.generateContent({
-          model: "gemini-3-flash-preview",
-          contents: [
-            {
-              inlineData: {
-                data: base64Data,
-                mimeType: file.type
-              }
+      const response = await ai.models.generateContent({
+        model: TTS_MODEL,
+        contents: [{ parts: [{ text }] }],
+        config: {
+          responseModalities: [Modality.AUDIO],
+          speechConfig: {
+            voiceConfig: {
+              prebuiltVoiceConfig: { voiceName: 'Kore' },
             },
-            {
-              text: "Extract all Japanese vocabulary words from this image. For each word, provide its reading in Hiragana/Katakana ONLY (strictly NO KANJI) and its Bengali meaning. Format the output as a simple list where each line is 'JapaneseWord - BengaliMeaning'. Be extremely accurate. If a word is unclear, skip it. Do not hallucinate words that are not there."
-            }
-          ]
-        });
+          },
+        },
+      });
 
-        const extractedText = response.text || "";
-        if (extractedText.trim()) {
-          results.push(extractedText.trim());
+      const base64Audio = response.candidates?.[0]?.content?.parts?.[0]?.inlineData?.data;
+      if (base64Audio) {
+        const audioUrl = `data:audio/wav;base64,${base64Audio}`;
+        if (audioRef.current) {
+          audioRef.current.src = audioUrl;
+          audioRef.current.play();
         }
       }
-
-      if (results.length > 0) {
-        const combinedText = results.join('\n');
-        setInputText(prev => prev ? `${prev}\n${combinedText}` : combinedText);
-      } else {
-        setError("আরে ভাই, ছবিগুলো থেকে তো কিছুই পেলাম না! একটু পরিষ্কার ছবি দে তো।");
-      }
-      setIsExtracting(false);
-    } catch (err) {
-      console.error(err);
-      setError("ধুর শালা! ছবিগুলো প্রসেস করতে গিয়ে ঝামেলা হয়ে গেল। আবার ট্রাই কর।");
-      setIsExtracting(false);
+    } catch (error) {
+      console.error("TTS Error:", error);
+    } finally {
+      setIsSpeaking(false);
     }
   };
 
-  const isFinished = quiz && Object.keys(quiz.userAnswers).length === quiz.questions.length && quiz.showResult && quiz.currentIndex === quiz.questions.length - 1;
+  const handleVoiceQuery = async () => {
+    // In a real implementation, we'd use Web Speech API to get text
+    // For this demo, we'll simulate a query or use a text input
+    const query = prompt("ভয়েস অ্যাসিস্ট্যান্টকে কিছু জিজ্ঞাসা করুন (যেমন: 'Hello মানে কি?')");
+    if (!query) return;
+
+    setAssistantResponse("চিন্তা করছি...");
+    try {
+      const response = await ai.models.generateContent({
+        model: GEMINI_MODEL,
+        contents: [
+          { text: `You are a Japanese language assistant. Answer this query about vocabulary: "${query}". Keep it brief and professional. Use only Hiragana/Katakana for Japanese words. Answer in Bangla.` }
+        ]
+      });
+
+      const reply = response.text || "দুঃখিত, আমি বুঝতে পারিনি।";
+      setAssistantResponse(reply);
+      speak(reply);
+    } catch (error) {
+      setAssistantResponse("দুঃখিত, সমস্যা হয়েছে।");
+    }
+  };
+
+  // --- Dropzone ---
+  const { getRootProps, getInputProps, isDragActive } = useDropzone({
+    onDrop: processImages,
+    accept: { 'image/*': [] },
+    multiple: true
+  } as any);
 
   return (
-    <div className="min-h-screen bg-[#0a0a0a] text-white font-sans selection:bg-orange-500/30">
+    <div className="min-h-screen bg-[#0a0a0a] text-stone-100 font-sans selection:bg-orange-500/30">
+      <audio ref={audioRef} onEnded={() => setIsSpeaking(false)} />
+      
       {/* Header */}
-      <header className="border-b border-white/10 bg-black/50 backdrop-blur-lg sticky top-0 z-10">
-        <div className="max-w-4xl mx-auto px-4 py-3 flex items-center justify-between">
-          <div className="flex items-center gap-2">
-            <div className="w-8 h-8 bg-orange-600 rounded-lg flex items-center justify-center text-white shadow-lg shadow-orange-900/20">
-              <BrainCircuit size={18} />
+      <header className="fixed top-0 w-full z-50 bg-[#0a0a0a]/80 backdrop-blur-md border-b border-stone-800/50">
+        <div className="max-w-6xl mx-auto px-6 h-20 flex items-center justify-between">
+          <div className="flex items-center gap-3 cursor-pointer" onClick={() => setCurrentView('upload')}>
+            <div className="w-10 h-10 bg-orange-600 rounded-xl flex items-center justify-center shadow-lg shadow-orange-900/20">
+              <BrainCircuit className="text-white" size={24} />
             </div>
-            <div>
-              <h1 className="font-bold text-lg tracking-tight">Oi shuvo tor vocabulary ses hoice ? 🦒</h1>
-              <p className="text-[10px] text-stone-500 font-mono">বেশি পকপক না করে পড়া শুরু কর!</p>
-            </div>
+            <h1 className="text-xl font-bold tracking-tight">Nihongo<span className="text-orange-500">Master</span></h1>
           </div>
           
-          <div className="flex items-center gap-3">
+          <nav className="hidden md:flex items-center gap-8">
             <button 
-              onClick={() => setSoundEnabled(!soundEnabled)}
-              className="p-2 hover:bg-white/10 rounded-full transition-colors text-stone-400"
+              onClick={() => setCurrentView('upload')}
+              className={`text-sm font-medium transition-colors ${currentView === 'upload' ? 'text-orange-500' : 'text-stone-400 hover:text-white'}`}
             >
-              {soundEnabled ? <Volume2 size={20} /> : <VolumeX size={20} />}
+              আপলোড
             </button>
-            {quiz && (
-              <div className="flex items-center gap-3 pl-3 border-l border-white/10">
-                <div className="text-right">
-                  <p className="font-mono text-xs text-stone-500">{quiz.currentIndex + 1}/{quiz.questions.length}</p>
-                </div>
-                <button 
-                  onClick={resetQuiz}
-                  className="p-1.5 hover:bg-white/10 rounded-lg transition-colors text-stone-400"
-                >
-                  <RefreshCcw size={18} />
-                </button>
-              </div>
-            )}
-          </div>
+            <button 
+              onClick={() => setCurrentView('list')}
+              className={`text-sm font-medium transition-colors ${currentView === 'list' ? 'text-orange-500' : 'text-stone-400 hover:text-white'}`}
+            >
+              শব্দভাণ্ডার ({vocabList.length})
+            </button>
+            <button 
+              onClick={generateQuiz}
+              disabled={vocabList.length < 4}
+              className={`px-5 py-2 rounded-full text-sm font-bold transition-all ${
+                vocabList.length < 4 
+                ? 'bg-stone-800 text-stone-500 cursor-not-allowed' 
+                : 'bg-orange-600 text-white hover:bg-orange-500 hover:scale-105 active:scale-95'
+              }`}
+            >
+              প্র্যাকটিস শুরু করুন
+            </button>
+          </nav>
         </div>
       </header>
 
-      <main className="max-w-4xl mx-auto px-4 py-8 sm:py-12">
+      <main className="pt-32 pb-20 max-w-4xl mx-auto px-6">
         <AnimatePresence mode="wait">
-          {!quiz ? (
-            <motion.div 
-              key="input"
+          
+          {/* Upload View */}
+          {currentView === 'upload' && (
+            <motion.div
+              key="upload"
+              initial={{ opacity: 0, y: 20 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0, y: -20 }}
+              className="space-y-8"
+            >
+              <div className="text-center space-y-4">
+                <h2 className="text-4xl md:text-5xl font-bold tracking-tighter font-display">আপনার জাপানি শব্দ শিখুন <br/><span className="text-gradient">ছবির মাধ্যমে</span></h2>
+                <p className="text-stone-400 max-w-lg mx-auto">বই বা খাতার ছবি আপলোড করুন, আমাদের AI স্বয়ংক্রিয়ভাবে জাপানি শব্দগুলো শনাক্ত করবে এবং আপনার জন্য MCQ তৈরি করবে।</p>
+              </div>
+
+              <div 
+                {...getRootProps()} 
+                className={`relative group cursor-pointer rounded-3xl border-2 border-dashed transition-all duration-300 p-12 flex flex-col items-center justify-center gap-6 glass ${
+                  isDragActive ? 'border-orange-500 bg-orange-500/5' : 'border-stone-800 hover:border-stone-700 hover:bg-stone-900/50'
+                }`}
+              >
+                <input {...getInputProps()} />
+                <div className="w-20 h-20 rounded-2xl bg-stone-900 flex items-center justify-center group-hover:scale-110 transition-transform">
+                  {isProcessing ? <Loader2 className="text-orange-500 animate-spin" size={40} /> : <Upload className="text-stone-400 group-hover:text-orange-500" size={40} />}
+                </div>
+                <div className="text-center">
+                  <p className="text-lg font-semibold">{isProcessing ? 'প্রসেস করা হচ্ছে...' : 'ছবি এখানে ড্র্যাগ করুন অথবা ক্লিক করুন'}</p>
+                  <p className="text-sm text-stone-500 mt-1">একাধিক ছবি একসাথে আপলোড করা যাবে</p>
+                </div>
+              </div>
+
+              {vocabList.length > 0 && (
+                <div className="flex justify-center">
+                  <button 
+                    onClick={() => setCurrentView('list')}
+                    className="flex items-center gap-2 text-stone-400 hover:text-white transition-colors"
+                  >
+                    আগের শব্দগুলো দেখুন <ChevronRight size={16} />
+                  </button>
+                </div>
+              )}
+            </motion.div>
+          )}
+
+          {/* List View */}
+          {currentView === 'list' && (
+            <motion.div
+              key="list"
               initial={{ opacity: 0 }}
               animate={{ opacity: 1 }}
               exit={{ opacity: 0 }}
-              className="space-y-6"
+              className="space-y-8"
             >
-              <div className="space-y-1">
-                <h2 className="text-2xl sm:text-3xl font-bold text-white">প্র্যাকটিস করার জন্য <span className="text-orange-500">Next</span> এ বাটনে গুতা দে</h2>
-                <p className="text-stone-400 text-sm sm:text-base">
-                  নিচে তোর জাপানিজ শব্দগুলো পেস্ট কর, আমি ৫০টা প্রশ্ন বানিয়ে দিচ্ছি। 
-                  অথবা অনেকগুলো ছবি একসাথে সিলেক্ট করে <span className="text-orange-500 font-bold">Photos Import</span> এ ক্লিক কর।
-                </p>
-              </div>
-
-              <div className="relative">
-                <textarea
-                  value={inputText}
-                  onChange={(e) => setInputText(e.target.value)}
-                  placeholder="এখানে তোর শব্দগুলো পেস্ট কর...&#10;যেমন:&#10;okimasu - wake up&#10;nemasu - sleep"
-                  className="w-full h-48 sm:h-64 p-4 bg-[#141414] border border-white/10 rounded-2xl focus:border-orange-500 focus:ring-0 transition-all resize-none text-base sm:text-lg leading-relaxed shadow-inner"
-                />
-                
-                <div className="absolute bottom-4 right-4 flex gap-2">
-                  <button
-                    onClick={() => {
-                      setInputText('ohayou - good morning\nkonnichiwa - hello\narigatou - thank you\nsayonara - goodbye\nhai - yes\niie - no\nsumimasen - excuse me\ngomen nasai - sorry\noishii - delicious\nkawaii - cute');
-                      playSound('click');
-                    }}
-                    className="p-3 bg-white/5 hover:bg-orange-500/10 border border-white/10 rounded-xl text-stone-400 hover:text-orange-400 transition-all"
-                    title="Load Sample Words"
+              <div className="flex items-center justify-between">
+                <h2 className="text-2xl font-bold">আপনার শব্দভাণ্ডার</h2>
+                <div className="flex gap-4">
+                  <button 
+                    onClick={() => setVocabList([])}
+                    className="p-2 text-stone-500 hover:text-red-500 transition-colors"
+                    title="সব মুছে ফেলুন"
                   >
-                    <BookOpen size={20} />
+                    <Trash2 size={20} />
                   </button>
-                  <button
-                    onClick={() => {
-                      setInputText('');
-                      playSound('click');
-                    }}
-                    className="p-3 bg-white/5 hover:bg-red-500/10 border border-white/10 rounded-xl text-stone-400 hover:text-red-400 transition-all"
-                    title="Clear All"
+                  <button 
+                    onClick={generateQuiz}
+                    disabled={vocabList.length < 4}
+                    className="flex items-center gap-2 px-6 py-2 bg-orange-600 rounded-full font-bold hover:bg-orange-500 disabled:opacity-50"
                   >
-                    <RefreshCcw size={20} />
-                  </button>
-                  <input 
-                    type="file" 
-                    accept="image/*" 
-                    multiple
-                    className="hidden" 
-                    ref={fileInputRef}
-                    onChange={handleImageUpload}
-                  />
-                  <button
-                    onClick={() => fileInputRef.current?.click()}
-                    disabled={isExtracting}
-                    className="p-3 bg-white/5 hover:bg-white/10 border border-white/10 rounded-xl text-stone-400 hover:text-white transition-all flex items-center gap-2"
-                    title="Upload Multiple Images"
-                  >
-                    {isExtracting ? (
-                      <Loader2 className="animate-spin" size={20} />
-                    ) : (
-                      <ImageIcon size={20} />
-                    )}
-                    <span className="text-[10px] font-bold">Photos Import</span>
+                    <Languages size={18} /> প্র্যাকটিস শুরু
                   </button>
                 </div>
               </div>
 
-              {error && (
-                <div className="p-3 bg-red-500/10 border border-red-500/20 text-red-400 rounded-xl flex items-center gap-2 text-sm">
-                  <XCircle size={16} />
-                  <span>{error}</span>
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                {vocabList.map((item) => (
+                  <motion.div 
+                    layout
+                    key={item.id}
+                    className="p-6 rounded-2xl bg-stone-900/50 border border-stone-800 flex items-center justify-between group hover:border-stone-700 transition-colors"
+                  >
+                    <div className="space-y-1">
+                      <p className="text-2xl font-bold text-orange-500">{item.japanese}</p>
+                      <p className="text-sm text-stone-400">{item.bangla} • {item.english}</p>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <button 
+                        onClick={() => speak(item.japanese)}
+                        className="p-3 rounded-xl bg-stone-800 text-stone-400 hover:text-white hover:bg-stone-700 transition-all"
+                      >
+                        <Volume2 size={20} />
+                      </button>
+                      <button 
+                        onClick={() => setVocabList(prev => prev.filter(v => v.id !== item.id))}
+                        className="p-3 rounded-xl bg-stone-800 text-stone-500 hover:text-red-500 hover:bg-stone-700 transition-all"
+                      >
+                        <Trash2 size={20} />
+                      </button>
+                    </div>
+                  </motion.div>
+                ))}
+              </div>
+
+              {vocabList.length === 0 && (
+                <div className="text-center py-20 text-stone-500">
+                  <ImageIcon size={48} className="mx-auto mb-4 opacity-20" />
+                  <p>কোন শব্দ নেই। ছবি আপলোড করে শুরু করুন।</p>
                 </div>
               )}
-
-              <button
-                onClick={generateQuiz}
-                disabled={isLoading || !inputText.trim()}
-                className={cn(
-                  "w-full py-4 rounded-2xl font-bold text-lg flex items-center justify-center gap-2 transition-all active:scale-[0.98]",
-                  isLoading || !inputText.trim() 
-                    ? "bg-white/5 text-stone-600 cursor-not-allowed" 
-                    : "bg-orange-600 text-white hover:bg-orange-500 shadow-lg shadow-orange-900/20"
-                )}
-              >
-                {isLoading ? (
-                  <>
-                    <Loader2 className="animate-spin" size={20} />
-                    <span>তোর জন্য প্রশ্ন বানাচ্ছি, একটু সবুর কর...</span>
-                  </>
-                ) : (
-                  <>
-                    <Send size={20} />
-                    <span>Next এ গুতা দে</span>
-                  </>
-                )}
-              </button>
             </motion.div>
-          ) : isFinished ? (
+          )}
+
+          {/* Practice View */}
+          {currentView === 'practice' && questions.length > 0 && (
             <motion.div
-              key="summary"
-              initial={{ opacity: 0, scale: 0.98 }}
+              key="practice"
+              initial={{ opacity: 0, scale: 0.95 }}
               animate={{ opacity: 1, scale: 1 }}
-              className="max-w-2xl mx-auto text-center space-y-6"
-            >
-              <div className="w-24 h-24 bg-orange-500/10 rounded-full flex items-center justify-center text-orange-500 mx-auto border border-orange-500/20">
-                <Trophy size={48} />
-              </div>
-
-              <div className="space-y-1">
-                <h2 className="text-3xl font-bold">সাবাস বেটা! তুই তো দেখি হিরো হয়ে গেলি!</h2>
-                <p className="text-stone-400">তোর স্কোর: <span className="text-orange-500 font-bold">{quiz.score}</span> / {quiz.questions.length}</p>
-              </div>
-
-              <div className="bg-[#141414] border border-white/10 rounded-2xl overflow-hidden max-h-[40vh] overflow-y-auto custom-scrollbar">
-                <div className="divide-y divide-white/5">
-                  {quiz.questions.map((q, i) => (
-                    <div key={i} className="p-3 flex items-center justify-between text-left text-sm">
-                      <div>
-                        <p className="font-bold japanese-text">{q.word}</p>
-                        <p className="text-stone-500 text-xs">{q.correctAnswer}</p>
-                      </div>
-                      {quiz.userAnswers[i] === q.correctAnswer ? (
-                        <CheckCircle2 className="text-green-500" size={18} />
-                      ) : (
-                        <XCircle className="text-red-500" size={18} />
-                      )}
-                    </div>
-                  ))}
-                </div>
-              </div>
-
-              <button
-                onClick={resetQuiz}
-                className="w-full py-4 bg-white text-black rounded-2xl font-bold hover:bg-stone-200 transition-all"
-              >
-                আবার খেলবি?
-              </button>
-            </motion.div>
-          ) : (
-            <motion.div 
-              key="quiz"
-              initial={{ opacity: 0, y: 10 }}
-              animate={{ opacity: 1, y: 0 }}
-              exit={{ opacity: 0, y: -10 }}
+              exit={{ opacity: 0, scale: 0.95 }}
               className="max-w-2xl mx-auto space-y-8"
             >
-              <div className="text-center space-y-2">
-                <h2 className="text-5xl sm:text-6xl font-bold text-white japanese-text tracking-tight">
-                  {quiz.questions[quiz.currentIndex].word}
-                </h2>
-                <p className="text-stone-500 text-sm">সঠিক মানে কোনটা? বল তো দেখি...</p>
-              </div>
+              {!quizFinished ? (
+                <>
+                  <div className="flex items-center justify-between text-sm text-stone-500">
+                    <span>প্রশ্ন {quizIndex + 1} / {questions.length}</span>
+                    <span>স্কোর: {score}</span>
+                  </div>
+                  
+                  <div className="w-full h-2 bg-stone-900 rounded-full overflow-hidden">
+                    <motion.div 
+                      className="h-full bg-orange-600"
+                      initial={{ width: 0 }}
+                      animate={{ width: `${((quizIndex + 1) / questions.length) * 100}%` }}
+                    />
+                  </div>
 
-              <div className="grid grid-cols-1 gap-3">
-                {quiz.questions[quiz.currentIndex].options.map((option, i) => {
-                  const isSelected = quiz.userAnswers[quiz.currentIndex] === option;
-                  const isCorrect = option === quiz.questions[quiz.currentIndex].correctAnswer;
-                  const showFeedback = quiz.showResult;
+                  <div className="p-12 rounded-3xl bg-stone-900 border border-stone-800 text-center space-y-6 glass min-h-[240px] flex flex-col justify-center">
+                    <p className="text-sm uppercase tracking-widest text-stone-500 mb-2">
+                      {questions[quizIndex].type.includes('to-jp') ? 'জাপানি অর্থ কি?' : 'এর অর্থ কি?'}
+                    </p>
+                    <h3 className="text-5xl font-bold text-white font-display leading-tight">{questions[quizIndex].questionText}</h3>
+                  </div>
 
-                  return (
-                    <button
-                      key={i}
-                      onClick={() => handleAnswer(option)}
-                      disabled={showFeedback}
-                      className={cn(
-                        "p-5 text-left rounded-2xl border transition-all text-base sm:text-lg font-medium",
-                        !showFeedback && "border-white/10 bg-white/5 hover:border-orange-500/50 hover:bg-white/10",
-                        showFeedback && isCorrect && "border-green-500/50 bg-green-500/10 text-green-400",
-                        showFeedback && isSelected && !isCorrect && "border-red-500/50 bg-red-500/10 text-red-400",
-                        showFeedback && !isSelected && !isCorrect && "border-transparent opacity-30"
-                      )}
+                  <div className="grid grid-cols-1 gap-3">
+                    {questions[quizIndex].options.map((option) => {
+                      const isSelected = selectedAnswer === option;
+                      const isCorrectOption = option === questions[quizIndex].correctAnswer;
+                      
+                      let btnClass = "p-5 rounded-2xl border text-left transition-all duration-200 font-medium ";
+                      if (!selectedAnswer) {
+                        btnClass += "bg-stone-900 border-stone-800 hover:border-stone-600 hover:bg-stone-800";
+                      } else if (isCorrectOption) {
+                        btnClass += "bg-green-500/20 border-green-500 text-green-400";
+                      } else if (isSelected && !isCorrectOption) {
+                        btnClass += "bg-red-500/20 border-red-500 text-red-400";
+                      } else {
+                        btnClass += "bg-stone-900 border-stone-800 opacity-50";
+                      }
+
+                      return (
+                        <button
+                          key={option}
+                          disabled={!!selectedAnswer}
+                          onClick={() => handleAnswer(option)}
+                          className={btnClass}
+                        >
+                          <div className="flex items-center justify-between">
+                            <span>{option}</span>
+                            {selectedAnswer && isCorrectOption && <CheckCircle2 size={20} />}
+                            {selectedAnswer && isSelected && !isCorrectOption && <XCircle size={20} />}
+                          </div>
+                        </button>
+                      );
+                    })}
+                  </div>
+                </>
+              ) : (
+                <div className="text-center space-y-8 py-12">
+                  <div className="relative inline-block">
+                    <div className="w-32 h-32 rounded-full border-4 border-orange-600 flex items-center justify-center text-4xl font-bold">
+                      {Math.round((score / questions.length) * 100)}%
+                    </div>
+                  </div>
+                  <div className="space-y-2">
+                    <h2 className="text-3xl font-bold">চমৎকার!</h2>
+                    <p className="text-stone-400">আপনি {questions.length} টির মধ্যে {score} টি সঠিক উত্তর দিয়েছেন।</p>
+                  </div>
+                  <div className="flex gap-4 justify-center">
+                    <button 
+                      onClick={generateQuiz}
+                      className="px-8 py-3 bg-orange-600 rounded-full font-bold hover:bg-orange-500 transition-all flex items-center gap-2"
                     >
-                      {option}
+                      <RefreshCw size={18} /> আবার চেষ্টা করুন
                     </button>
-                  );
-                })}
-              </div>
-
-              <AnimatePresence>
-                {quiz.showResult && (
-                  <motion.div
-                    initial={{ opacity: 0, scale: 0.98 }}
-                    animate={{ opacity: 1, scale: 1 }}
-                  >
-                    <button
-                      onClick={nextQuestion}
-                      className="w-full py-4 bg-orange-600 text-white rounded-2xl font-bold flex items-center justify-center gap-2 hover:bg-orange-500 transition-all"
+                    <button 
+                      onClick={() => setCurrentView('list')}
+                      className="px-8 py-3 bg-stone-800 rounded-full font-bold hover:bg-stone-700 transition-all"
                     >
-                      <span>{quiz.currentIndex === quiz.questions.length - 1 ? "শেষ কর" : "পরের প্রশ্ন"}</span>
-                      <ChevronRight size={20} />
+                      শব্দভাণ্ডারে ফিরে যান
                     </button>
-                  </motion.div>
-                )}
-              </AnimatePresence>
+                  </div>
+                </div>
+              )}
+            </motion.div>
+          )}
+
+        </AnimatePresence>
+      </main>
+
+      {/* Voice Assistant Floating Button */}
+      <div className="fixed bottom-8 right-8 z-50 flex flex-col items-end gap-4">
+        <AnimatePresence>
+          {assistantResponse && (
+            <motion.div
+              initial={{ opacity: 0, scale: 0.8, y: 20 }}
+              animate={{ opacity: 1, scale: 1, y: 0 }}
+              exit={{ opacity: 0, scale: 0.8, y: 20 }}
+              className="max-w-xs p-4 bg-stone-900 border border-stone-800 rounded-2xl shadow-2xl text-sm"
+            >
+              <div className="flex items-start gap-3">
+                <div className="w-8 h-8 rounded-full bg-orange-600 flex-shrink-0 flex items-center justify-center">
+                  <BrainCircuit size={16} />
+                </div>
+                <p className="leading-relaxed">{assistantResponse}</p>
+              </div>
             </motion.div>
           )}
         </AnimatePresence>
-      </main>
+
+        <button 
+          onClick={handleVoiceQuery}
+          className={`w-16 h-16 rounded-full flex items-center justify-center shadow-2xl transition-all duration-300 ${
+            isSpeaking ? 'bg-green-600 animate-pulse' : 'bg-orange-600 hover:bg-orange-500 hover:scale-110'
+          }`}
+        >
+          {isSpeaking ? <Volume2 className="text-white" /> : <Mic className="text-white" />}
+        </button>
+      </div>
+
+      {/* Footer */}
+      <footer className="py-10 border-t border-stone-900 text-center text-stone-600 text-xs">
+        <p>© 2026 NihongoMaster. All Rights Reserved. Designed for Professional Learning.</p>
+      </footer>
     </div>
   );
 }
