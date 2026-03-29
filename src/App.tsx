@@ -44,6 +44,7 @@ export default function App() {
   const [vocabList, setVocabList] = useState<Vocabulary[]>([]);
   const [isProcessing, setIsProcessing] = useState(false);
   const [currentView, setCurrentView] = useState<'upload' | 'practice' | 'list'>('upload');
+  const [searchTerm, setSearchTerm] = useState("");
   const [questions, setQuestions] = useState<Question[]>([]);
   const [quizIndex, setQuizIndex] = useState(0);
   const [score, setScore] = useState(0);
@@ -55,6 +56,8 @@ export default function App() {
   const [isListening, setIsListening] = useState(false);
   const [assistantResponse, setAssistantResponse] = useState("");
   const [isSpeaking, setIsSpeaking] = useState(false);
+  const [showVoiceInput, setShowVoiceInput] = useState(false);
+  const [voiceQuery, setVoiceQuery] = useState("");
   const audioRef = useRef<HTMLAudioElement | null>(null);
 
   const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY! });
@@ -63,51 +66,60 @@ export default function App() {
   const processImages = async (files: File[]) => {
     setIsProcessing(true);
     try {
-      const imageParts = await Promise.all(
+      const results = await Promise.all(
         files.map(async (file) => {
           const base64 = await fileToBase64(file);
-          return {
-            inlineData: {
-              data: base64.split(',')[1],
-              mimeType: file.type,
-            },
-          };
+          const response = await ai.models.generateContent({
+            model: GEMINI_MODEL,
+            contents: [
+              {
+                parts: [
+                  {
+                    inlineData: {
+                      data: base64.split(',')[1],
+                      mimeType: file.type,
+                    },
+                  },
+                  { text: "Extract EVERY SINGLE Japanese vocabulary word from this image. Do not skip any. Provide the Japanese word (ONLY Hiragana/Katakana, NO Kanji), its Bangla meaning, and its English meaning. Return as a JSON array of objects with keys: japanese, bangla, english." }
+                ]
+              }
+            ],
+            config: {
+              responseMimeType: "application/json",
+              responseSchema: {
+                type: Type.ARRAY,
+                items: {
+                  type: Type.OBJECT,
+                  properties: {
+                    japanese: { type: Type.STRING },
+                    bangla: { type: Type.STRING },
+                    english: { type: Type.STRING },
+                  },
+                  required: ["japanese", "bangla", "english"]
+                }
+              }
+            }
+          });
+          return JSON.parse(response.text || "[]");
         })
       );
 
-      const response = await ai.models.generateContent({
-        model: GEMINI_MODEL,
-        contents: [
-          {
-            parts: [
-              ...imageParts,
-              { text: "Extract all Japanese vocabulary from these images. Provide the Japanese word (ONLY Hiragana/Katakana, NO Kanji), its Bangla meaning, and its English meaning. Return as a JSON array of objects with keys: japanese, bangla, english." }
-            ]
-          }
-        ],
-        config: {
-          responseMimeType: "application/json",
-          responseSchema: {
-            type: Type.ARRAY,
-            items: {
-              type: Type.OBJECT,
-              properties: {
-                japanese: { type: Type.STRING },
-                bangla: { type: Type.STRING },
-                english: { type: Type.STRING },
-              },
-              required: ["japanese", "bangla", "english"]
-            }
-          }
-        }
-      });
-
-      const newVocab: Vocabulary[] = JSON.parse(response.text || "[]").map((v: any) => ({
-        ...v,
+      const combinedVocab = results.flat();
+      
+      const newVocab: Vocabulary[] = combinedVocab.map((v: any) => ({
+        japanese: v.japanese,
+        bangla: v.bangla,
+        english: v.english,
         id: Math.random().toString(36).substr(2, 9)
       }));
 
-      setVocabList(prev => [...prev, ...newVocab]);
+      // Filter out duplicates based on Japanese word
+      setVocabList(prev => {
+        const existingWords = new Set(prev.map(v => v.japanese));
+        const uniqueNew = newVocab.filter(v => !existingWords.has(v.japanese));
+        return [...prev, ...uniqueNew];
+      });
+      
       setCurrentView('list');
     } catch (error) {
       console.error("Error processing images:", error);
@@ -133,13 +145,8 @@ export default function App() {
     const newQuestions: Question[] = [];
     const types: Question['type'][] = ['jp-to-bn', 'bn-to-jp', 'jp-to-en', 'en-to-jp'];
 
-    // Generate up to 50 questions or based on vocab size
-    const count = Math.min(50, vocabList.length * 2);
-    
-    for (let i = 0; i < count; i++) {
-      const word = vocabList[Math.floor(Math.random() * vocabList.length)];
-      const type = types[Math.floor(Math.random() * types.length)];
-      
+    // Helper to create a question
+    const createQuestion = (word: Vocabulary, type: Question['type']): Question => {
       let correctAnswer = "";
       let questionText = "";
       let options: string[] = [];
@@ -162,17 +169,33 @@ export default function App() {
         options = [correctAnswer, ...getRandomOptions(vocabList, 'japanese', correctAnswer)];
       }
 
-      newQuestions.push({
+      return {
         id: Math.random().toString(36).substr(2, 9),
         word,
         questionText,
         type,
         correctAnswer,
         options: shuffleArray(options)
-      });
+      };
+    };
+
+    // 1. Ensure EVERY word in the list is practiced at least once
+    vocabList.forEach(word => {
+      const type = types[Math.floor(Math.random() * types.length)];
+      newQuestions.push(createQuestion(word, type));
+    });
+
+    // 2. Add more random questions to reach at least 50 (if vocab size allows)
+    // We want a good mix of types for each word.
+    const targetCount = Math.max(50, vocabList.length);
+    
+    while (newQuestions.length < targetCount) {
+      const word = vocabList[Math.floor(Math.random() * vocabList.length)];
+      const type = types[Math.floor(Math.random() * types.length)];
+      newQuestions.push(createQuestion(word, type));
     }
 
-    setQuestions(newQuestions);
+    setQuestions(shuffleArray(newQuestions));
     setQuizIndex(0);
     setScore(0);
     setQuizFinished(false);
@@ -244,12 +267,13 @@ export default function App() {
     }
   };
 
-  const handleVoiceQuery = async () => {
-    // In a real implementation, we'd use Web Speech API to get text
-    // For this demo, we'll simulate a query or use a text input
-    const query = prompt("ভয়েস অ্যাসিস্ট্যান্টকে কিছু জিজ্ঞাসা করুন (যেমন: 'Hello মানে কি?')");
-    if (!query) return;
+  const handleVoiceQuery = async (e?: React.FormEvent) => {
+    if (e) e.preventDefault();
+    if (!voiceQuery.trim()) return;
 
+    const query = voiceQuery;
+    setVoiceQuery("");
+    setShowVoiceInput(false);
     setAssistantResponse("চিন্তা করছি...");
     try {
       const response = await ai.models.generateContent({
@@ -371,11 +395,27 @@ export default function App() {
               exit={{ opacity: 0 }}
               className="space-y-8"
             >
-              <div className="flex items-center justify-between">
+              <div className="flex flex-col md:flex-row items-center justify-between gap-4">
                 <h2 className="text-2xl font-bold">আপনার শব্দভাণ্ডার</h2>
+                <div className="flex flex-1 max-w-md w-full">
+                  <div className="relative w-full">
+                    <input 
+                      type="text" 
+                      placeholder="শব্দ খুঁজুন..." 
+                      value={searchTerm}
+                      onChange={(e) => setSearchTerm(e.target.value)}
+                      className="w-full bg-stone-900 border border-stone-800 rounded-xl py-2 px-4 pl-10 focus:outline-none focus:border-orange-500 transition-colors"
+                    />
+                    <BookOpen className="absolute left-3 top-2.5 text-stone-500" size={18} />
+                  </div>
+                </div>
                 <div className="flex gap-4">
                   <button 
-                    onClick={() => setVocabList([])}
+                    onClick={() => {
+                      if(confirm("আপনি কি নিশ্চিত যে আপনি সব শব্দ মুছে ফেলতে চান?")) {
+                        setVocabList([]);
+                      }
+                    }}
                     className="p-2 text-stone-500 hover:text-red-500 transition-colors"
                     title="সব মুছে ফেলুন"
                   >
@@ -392,7 +432,13 @@ export default function App() {
               </div>
 
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                {vocabList.map((item) => (
+                {vocabList
+                  .filter(item => 
+                    item.japanese.includes(searchTerm) || 
+                    item.bangla.toLowerCase().includes(searchTerm.toLowerCase()) || 
+                    item.english.toLowerCase().includes(searchTerm.toLowerCase())
+                  )
+                  .map((item) => (
                   <motion.div 
                     layout
                     key={item.id}
@@ -544,10 +590,35 @@ export default function App() {
               </div>
             </motion.div>
           )}
+
+          {showVoiceInput && (
+            <motion.form
+              initial={{ opacity: 0, x: 20 }}
+              animate={{ opacity: 1, x: 0 }}
+              exit={{ opacity: 0, x: 20 }}
+              onSubmit={handleVoiceQuery}
+              className="flex gap-2 bg-stone-900 p-2 rounded-2xl border border-stone-800 shadow-2xl"
+            >
+              <input 
+                autoFocus
+                type="text" 
+                placeholder="জিজ্ঞাসা করুন..." 
+                value={voiceQuery}
+                onChange={(e) => setVoiceQuery(e.target.value)}
+                className="bg-transparent border-none focus:ring-0 text-sm px-4 w-48"
+              />
+              <button 
+                type="submit"
+                className="p-2 bg-orange-600 rounded-xl hover:bg-orange-500 transition-colors"
+              >
+                <ChevronRight size={18} />
+              </button>
+            </motion.form>
+          )}
         </AnimatePresence>
 
         <button 
-          onClick={handleVoiceQuery}
+          onClick={() => setShowVoiceInput(!showVoiceInput)}
           className={`w-16 h-16 rounded-full flex items-center justify-center shadow-2xl transition-all duration-300 ${
             isSpeaking ? 'bg-green-600 animate-pulse' : 'bg-orange-600 hover:bg-orange-500 hover:scale-110'
           }`}
